@@ -1,0 +1,6 @@
+[package]
+name = "bytes2txt"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
