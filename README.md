@@ -6,7 +6,7 @@ A Rust library for encoding and decoding byte arrays into human-readable, copiab
 
 `bytes2txt` converts arbitrary byte sequences into strings composed entirely of printable ASCII characters (space through tilde, characters 32–126), and decodes them back. This makes encoded data easy to copy, paste, and share across different systems without worrying about encoding issues.
 
-The library uses a base-95 encoding scheme where each group of 4 input bytes is mapped to 5 printable characters, with a single padding digit appended to the end to indicate how many trailing zero bytes were added.
+The library uses a base-95 encoding scheme where each group of 4 input bytes is mapped to 5 printable characters, with a single padding digit prepended to the start to indicate how many trailing 0xFF bytes were added.
 
 ## Usage
 
@@ -35,14 +35,6 @@ use bytes2txt::decode;
 let decoded = decode(encoded);
 assert_eq!(decoded, Some(b"Hello, world!".to_vec()));
 ```
-
-## How It Works
-
-1. The input byte array is split into 4-byte chunks. If the length isn't a multiple of 4, zero-padding bytes are appended.
-2. Each 4-byte chunk is converted into a `u32` and then mapped to a 5-character string using a 95-character reference set (all printable ASCII characters).
-3. A final character is appended to indicate the number of padding bytes added during encoding.
-
-Decoding reverses this process.
 
 ## Note
 

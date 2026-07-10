@@ -1,204 +1,422 @@
-pub fn encode(buf: &[u8]) -> String {
-    let mut buf = buf.to_owned();
-    let mut padding_bytes = 0u8;
-    if !buf.len().is_multiple_of(4) {
-        padding_bytes = 4 - ((buf.len() % 4) as u8);
-        let mut zeros = std::iter::repeat_n(0u8, padding_bytes as usize).collect();
-        buf.append(&mut zeros);
-    }
+#![forbid(unsafe_code)]
 
-    let mut parts: Vec<String> = buf
-        .chunks_exact(4)
-        .map(|bytes| u32_to_base95string(four_bytes_to_u32(bytes)))
-        .collect();
+const BASE95_POWERS: [u32; 5] = [1u32, 95u32, 95u32.pow(2), 95u32.pow(3), 95u32.pow(4)];
+const SPACE_OFFSET: u32 = ' ' as u32;
 
-    parts.push(padding_bytes.to_string());
+pub fn encode(bytes: &[u8]) -> String {
+    let padding_count = (4 - (bytes.len() % 4)) % 4;
 
-    parts.concat()
-}
+    let mut data = bytes
+        .iter()
+        .copied()
+        .chain(std::iter::repeat_n(u8::MAX, padding_count));
 
-fn four_bytes_to_u32(bytes: &[u8]) -> u32 {
-    if bytes.len() != 4 {
-        panic!("incorrect number of bytes provided.");
-    }
-    let byte1 = (bytes[0] as u32) << 24;
-    let byte2 = (bytes[1] as u32) << 16;
-    let byte3 = (bytes[2] as u32) << 8;
-    let byte4 = bytes[3] as u32;
-    byte1 + byte2 + byte3 + byte4
-}
-
-fn u32_to_base95string(value: u32) -> String {
-    let mut value = value;
-
-    let first_digit = char::from_u32(value / 81450625 + 32)
-        .expect("this shouldn't fail because: u32::MAX is Smaller than 95^5"); // 95 ^ 4
-    value %= 81450625;
-
-    let second_digit = char::from_u32(value / 857375 + 32)
-        .expect("this shouldn't fail because: u32::MAX is Smaller than 95^5"); // 95 ^ 3
-    value %= 857375;
-
-    let third_digit = char::from_u32(value / 9025 + 32)
-        .expect("this shouldn't fail because: u32::MAX is Smaller than 95^5"); // 95 ^ 2
-    value %= 9025;
-
-    let fourth_digit = char::from_u32(value / 95 + 32)
-        .expect("this shouldn't fail because: u32::MAX is Smaller than 95^5"); // 95 ^ 1
-
-    let fifth_digit = char::from_u32(value % 95 + 32)
-        .expect("this shouldn't fail because: u32::MAX is Smaller than 95^5"); // 95 ^ 0
-
-    format!(
-        "{}{}{}{}{}",
-        first_digit, second_digit, third_digit, fourth_digit, fifth_digit
+    std::iter::once(
+        char::from_digit(padding_count as u32, 10).expect("calculated value should be int."),
     )
+    .chain((0..(bytes.len() + padding_count) / 4).flat_map(|_| {
+        u32_to_base95_string(u32::from_be_bytes([
+            data.next()
+                .expect("already padded iterator shouldn't be small."),
+            data.next()
+                .expect("already padded iterator shouldn't be small."),
+            data.next()
+                .expect("already padded iterator shouldn't be small."),
+            data.next()
+                .expect("already padded iterator shouldn't be small."),
+        ]))
+        .into_iter()
+    }))
+    .collect()
 }
 
-pub fn decode(txt: String) -> Option<Vec<u8>> {
-    if !txt.len().is_multiple_of(5) || txt.len() == 5 || !txt.is_ascii() {
+fn u32_to_base95_string(value: u32) -> [char; 5] {
+    let mut value = value;
+    let mut result = [' '; 5];
+    for (i, slot) in result.iter_mut().enumerate() {
+        let index = 4 - i;
+        *slot = char::from_u32(value / BASE95_POWERS[index] + SPACE_OFFSET).unwrap();
+        value %= BASE95_POWERS[index];
+    }
+    result
+}
+
+pub fn decode(txt: &str) -> Option<Vec<u8>> {
+    if txt.is_empty() || txt.len() % 5 != 1 || !txt.is_ascii() {
         return None;
     }
 
-    let chars = txt.chars().collect::<Vec<_>>();
+    let mut chars = txt.chars();
 
-    let (padding_bytes, digits) = chars
-        .split_last()
-        .expect("already checked size shouldn't be 0.");
+    let padding_count = chars.next().unwrap().to_digit(10)? as usize;
+    let bytes_count = (txt.len() / 5) * 4;
 
-    let padding_bytes = padding_bytes.to_digit(10)? as usize;
+    if padding_count > 3 || bytes_count < padding_count {
+        return None;
+    }
 
-    let bytes = digits
-        .chunks_exact(5)
-        .flat_map(|chunk| u32_to_four_bytes(base95string_to_u32(chunk)))
-        .take(txt.len() / 5 * 4 - padding_bytes)
-        .collect();
+    if bytes_count == 0 {
+        return Some(Vec::new());
+    }
+
+    let mut bytes: Vec<u8> = Vec::with_capacity(bytes_count - padding_count);
+    for _ in 0..(txt.len() / 5 - 1) {
+        bytes.extend_from_slice(&u32::to_be_bytes(base95string_to_u32(&[
+            chars.next().filter(|char| *char >= ' ' && *char <= '~')?,
+            chars.next().filter(|char| *char >= ' ' && *char <= '~')?,
+            chars.next().filter(|char| *char >= ' ' && *char <= '~')?,
+            chars.next().filter(|char| *char >= ' ' && *char <= '~')?,
+            chars.next().filter(|char| *char >= ' ' && *char <= '~')?,
+        ])?));
+    }
+    bytes.extend_from_slice(
+        &u32::to_be_bytes(base95string_to_u32(&[
+            chars.next().filter(|char| *char >= ' ' && *char <= '~')?,
+            chars.next().filter(|char| *char >= ' ' && *char <= '~')?,
+            chars.next().filter(|char| *char >= ' ' && *char <= '~')?,
+            chars.next().filter(|char| *char >= ' ' && *char <= '~')?,
+            chars.next().filter(|char| *char >= ' ' && *char <= '~')?,
+        ])?)[0..(4 - padding_count)],
+    );
+
     Some(bytes)
 }
 
-fn base95string_to_u32(string: &[char]) -> u32 {
-    let mut string = string.iter().map(|&char| (char as u32) - 32);
-    string.next().expect("size checked at compile time shouldn't fail") * 81450625 // 95 ^ 4
-    + string.next().expect("size checked at compile time shouldn't fail") * 857375 // 95 ^ 3
-    + string.next().expect("size checked at compile time shouldn't fail") * 9025   // 95 ^ 2
-    + string.next().expect("size checked at compile time shouldn't fail") * 95     // 95 ^ 1
-    + string.next().expect("size checked at compile time shouldn't fail")
-}
+fn base95string_to_u32(string: &[char; 5]) -> Option<u32> {
+    let base10_value: u64 = string
+        .iter()
+        .rev()
+        .enumerate()
+        .map(|(index, &char)| ((char as u64) - SPACE_OFFSET as u64) * BASE95_POWERS[index] as u64) // 95 ^ index
+        .sum();
 
-fn u32_to_four_bytes(value: u32) -> [u8; 4] {
-    let byte4 = (value << 24) >> 24;
-    let byte3 = (value << 16) >> 24;
-    let byte2 = (value << 8) >> 24;
-    let byte1 = value >> 24;
-    [byte1 as u8, byte2 as u8, byte3 as u8, byte4 as u8]
+    u32::try_from(base10_value).ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // ============================================================
+    // Helper: u32_to_base95_string (fewer tests)
+    // ============================================================
+
     #[test]
-    fn four_bytes_to_u32_test() {
-        let bytes: [u8; 4] = [8, 27, 16, 250];
-        assert_eq!(four_bytes_to_u32(&bytes), 135991546);
+    fn u32_to_base95_string_zero() {
+        assert_eq!(u32_to_base95_string(0), [' '; 5]);
     }
 
     #[test]
-    fn four_bytes_to_u32_zero_test() {
-        let bytes: [u8; 4] = [0, 0, 0, 0];
-        assert_eq!(four_bytes_to_u32(&bytes), 0);
+    fn u32_to_base95_string_one() {
+        assert_eq!(u32_to_base95_string(1), [' ', ' ', ' ', ' ', '!']);
     }
 
     #[test]
-    fn four_bytes_to_u32_max_test() {
-        let bytes: [u8; 4] = [255, 255, 255, 255];
-        assert_eq!(four_bytes_to_u32(&bytes), 0xFFFFFFFF);
+    fn u32_to_base95_string_known_value() {
+        assert_eq!(u32_to_base95_string(135991546), ['!', '_', 'Z', '=', '{']);
     }
 
     #[test]
-    fn u32_to_base95string_zero_test() {
-        // Value 0 should produce all spaces (REFERENCE_SET[0] = "     ")
-        assert_eq!(u32_to_base95string(0), "     ");
+    fn u32_to_base95_string_max() {
+        assert_eq!(u32_to_base95_string(u32::MAX), ['T', 'e', 'I', '^', '%']);
+    }
+
+    // ============================================================
+    // Helper: base95string_to_u32 (fewer tests)
+    // ============================================================
+
+    #[test]
+    fn base95string_to_u32_zero() {
+        assert_eq!(base95string_to_u32(&[' ', ' ', ' ', ' ', ' ']), Some(0));
     }
 
     #[test]
-    fn u32_to_base95string_one_test() {
-        // Value 1 should produce "    !"
-        assert_eq!(u32_to_base95string(1), "    !");
+    fn base95string_to_u32_one() {
+        assert_eq!(base95string_to_u32(&[' ', ' ', ' ', ' ', '!']), Some(1));
     }
 
     #[test]
-    fn u32_to_base95string_test_value() {
-        // Value 135991546 should produce "!_Z={"
-        assert_eq!(u32_to_base95string(135991546), "!_Z={");
+    fn base95string_to_u32_known_value() {
+        assert_eq!(
+            base95string_to_u32(&['!', '_', 'Z', '=', '{']),
+            Some(135991546)
+        );
     }
 
     #[test]
-    fn encode_four_bytes_test() {
-        // [8, 27, 16, 250] -> 135991546 -> "!_Z={" + padding 0
-        assert_eq!(encode(&[8, 27, 16, 250]), "!_Z={0");
+    fn base95string_to_u32_round_trip() {
+        // round-trip: u32 -> string -> u32
+        for val in [0u32, 1, 42, 135991546, u32::MAX] {
+            let encoded = u32_to_base95_string(val);
+            assert_eq!(base95string_to_u32(&encoded), Some(val));
+        }
     }
 
+    // ============================================================
+    // encode (more tests)
+    // ============================================================
+
     #[test]
-    fn encode_empty_test() {
-        // Empty input produces padding byte "0" (no chunks, 0 extra padding needed)
+    fn encode_empty() {
         assert_eq!(encode(&[]), "0");
     }
 
     #[test]
-    fn encode_less_than_four_bytes_test() {
-        // 1 byte [72] -> [72, 0, 0, 0] -> 1207959552 (big-endian) -> ".nuxc" + padding 3
-        assert_eq!(encode(&[72]), ".nuxc3");
+    fn encode_four_bytes_zero_padding() {
+        // [8, 27, 16, 250] -> 4 bytes -> padding_count = 0
+        assert_eq!(encode(&[8, 27, 16, 250]), "0!_Z={");
     }
 
     #[test]
-    fn encode_pads_with_zeros_test() {
-        // 2 bytes [0, 0] -> [0, 0, 0, 0] -> 0 -> "     " + padding 2
-        assert_eq!(encode(&[0, 0]), "     2");
-        // 3 bytes [0, 0, 0] -> [0, 0, 0, 0] -> 0 -> "     " + padding 1
-        assert_eq!(encode(&[0, 0, 0]), "     1");
+    fn encode_one_byte_three_padding() {
+        // [72] -> padding_count = 3
+        assert_eq!(encode(&[72]), "3/#Lu|");
     }
 
     #[test]
-    fn encode_multiple_chunks_test() {
-        // 8 bytes -> two chunks of 4
-        // [1, 2, 3, 4] -> 16909060 -> " 3dW*"
-        // [5, 6, 7, 8] -> 84281096 -> "!#<[I"
-        // + padding 0
-        let bytes: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8];
-        assert_eq!(encode(&bytes), " 3dW*!#<[I0");
+    fn encode_one_byte_zero_value() {
+        // [0] -> padding_count = 3, data padded with 0xFF
+        assert_eq!(encode(&[0]), "3 3U|9");
     }
 
     #[test]
-    fn base95string_to_u32_zero_test() {
-        // "     " (5 spaces) should produce 0
-        // Space = ASCII 32, so char - 32 = 0 for all
-        assert_eq!(base95string_to_u32(&[' ', ' ', ' ', ' ', ' ']), 0);
+    fn encode_two_bytes_two_padding() {
+        // [0, 0] -> padding_count = 2
+        assert_eq!(encode(&[0, 0]), "2  '8p");
     }
 
     #[test]
-    fn base95string_to_u32_one_test() {
-        // "    !" (4 spaces + !) should produce 1
-        // ! = ASCII 33, so char - 32 = 1
-        assert_eq!(base95string_to_u32(&[' ', ' ', ' ', ' ', '!']), 1);
+    fn encode_three_bytes_one_padding() {
+        // [0, 0, 0] -> padding_count = 1
+        assert_eq!(encode(&[0, 0, 0]), "1   \"a");
     }
 
     #[test]
-    fn base95string_to_u32_test_value() {
-        // "!_Z={" should produce 135991546
-        // ! = 1, _ = 63, Z = 58, = = 29, { = 91
-        assert_eq!(base95string_to_u32(&['!', '_', 'Z', '=', '{']), 135991546);
+    fn encode_two_chunks_zero_padding() {
+        // 8 bytes -> 2 chunks, padding_count = 0
+        let input = vec![1, 2, 3, 4, 5, 6, 7, 8];
+        assert_eq!(encode(&input), "0 3dW*!#<[I");
     }
 
     #[test]
-    fn u32_to_four_bytes_test() {
-        // Value 135991546 should produce [8, 27, 16, 250]
-        assert_eq!(u32_to_four_bytes(135991546), [8, 27, 16, 250]);
+    fn encode_five_bytes() {
+        // 5 bytes -> 2 chunks, padding_count = 3
+        let input = vec![0, 0, 0, 0, 0];
+        assert_eq!(encode(&input), "3      3U|9");
     }
 
     #[test]
-    fn u32_to_four_bytes_zero_test() {
-        // Value 0 should produce [0, 0, 0, 0]
-        assert_eq!(u32_to_four_bytes(0), [0, 0, 0, 0]);
+    fn encode_six_bytes() {
+        // 6 bytes -> 2 chunks, padding_count = 2
+        let input = vec![0, 0, 0, 0, 0, 0];
+        assert_eq!(encode(&input), "2       '8p");
+    }
+
+    #[test]
+    fn encode_seven_bytes() {
+        // 7 bytes -> 2 chunks, padding_count = 1
+        let input = vec![0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(encode(&input), "1        \"a");
+    }
+
+    #[test]
+    fn encode_all_zeros_four_bytes() {
+        assert_eq!(encode(&[0, 0, 0, 0]), "0     ");
+    }
+
+    #[test]
+    fn encode_all_max_four_bytes() {
+        assert_eq!(encode(&[255, 255, 255, 255]), "0TeI^%");
+    }
+
+    #[test]
+    fn encode_output_is_printable_ascii() {
+        // Output must only contain chars 32..=126 (space through tilde)
+        let result = encode(&[0xDE, 0xAD, 0xBE, 0xEF, 0x42, 0x13, 0x37]);
+        for ch in result.chars() {
+            let code = ch as u32;
+            assert!(
+                (32..=126).contains(&code),
+                "char {ch:?} (u+{code:04X}) is not printable ASCII"
+            );
+        }
+    }
+
+    #[test]
+    fn encode_output_length_formula() {
+        // For n > 0, output len = 1 + 5 * ceil(n / 4)
+        // For n = 0, output len = 1
+        for n in 0..=20 {
+            let input: Vec<u8> = (0..n as u8).collect();
+            let result = encode(&input);
+            let expected_len = if n == 0 { 1 } else { 1 + 5 * ((n + 3) / 4) };
+            assert_eq!(result.len(), expected_len, "wrong length for n={n}");
+        }
+    }
+
+    #[test]
+    fn encode_padding_digit_is_first_char() {
+        let result = encode(&[42, 17, 88, 13, 99]);
+        let first = result.chars().next().unwrap();
+        assert!(first.is_ascii_digit(), "first char should be a digit");
+    }
+
+    // ============================================================
+    // decode (more tests)
+    // ============================================================
+
+    #[test]
+    fn decode_single_chunk_zero_padding() {
+        assert_eq!(decode("0!_Z={"), Some(vec![8, 27, 16, 250]));
+    }
+
+    #[test]
+    fn decode_single_chunk_three_padding() {
+        assert_eq!(decode("3/#Lu|"), Some(vec![72]));
+    }
+
+    #[test]
+    fn decode_single_chunk_two_padding() {
+        assert_eq!(decode("2  '8p"), Some(vec![0, 0]));
+    }
+
+    #[test]
+    fn decode_single_chunk_one_padding() {
+        assert_eq!(decode("1   \"a"), Some(vec![0, 0, 0]));
+    }
+
+    #[test]
+    fn decode_multi_chunk_zero_padding() {
+        assert_eq!(decode("0 3dW*!#<[I"), Some(vec![1, 2, 3, 4, 5, 6, 7, 8]));
+    }
+
+    #[test]
+    fn decode_empty_string() {
+        assert_eq!(decode(""), None);
+    }
+
+    #[test]
+    fn decode_non_ascii() {
+        // non-ASCII bytes should be rejected
+        assert_eq!(decode("\u{00e9}!!!!!"), None); // é at start
+        assert_eq!(decode("!!!!!\u{00e9}"), None); // é at end
+    }
+
+    #[test]
+    fn decode_empty_encoding() {
+        // encode(&[]) produces "0", decode should return empty vec
+        assert_eq!(decode("0"), Some(vec![]));
+    }
+
+    #[test]
+    fn decode_ascii_control_characters_rejected() {
+        // Characters below space (e.g. tab, newline) should be rejected
+        assert_eq!(decode("0\t!!!!"), None);
+        assert_eq!(decode("0\n!!!!"), None);
+        assert_eq!(decode("0\0!!!!"), None);
+    }
+
+    #[test]
+    fn decode_invalid_padding_digit() {
+        // padding digit must be 0-3
+        // Using letters and symbols as padding
+        let encoded_with_padding_a = "a    !"; // "    !" + "a" (not a digit)
+        assert_eq!(decode(encoded_with_padding_a), None);
+
+        let encoded_with_padding_slash = "/    !"; // "    !" + "/" (not a digit)
+        assert_eq!(decode(encoded_with_padding_slash), None);
+
+        let encoded_with_padding_large = "5    !"; // "    !" + "/" (not a digit)
+        assert_eq!(decode(encoded_with_padding_large), None);
+    }
+
+    #[test]
+    fn decode_malicious_overflow_panic() {
+        // BUG: high-valued printable chars cause u32 overflow in base95string_to_u32.
+        // '~' (126) gives digit 94, and 94 * 95^4 > u32::MAX.
+        // This should return None, but currently panics in debug builds.
+        decode("0~~~~~");
+    }
+
+    #[test]
+    fn decode_padding_digit_out_of_range() {
+        let encoded_with_padding = "3";
+        assert_eq!(decode(encoded_with_padding), None);
+
+        let encoded_with_padding_large = "5    !"; // 5 is larger than 3
+        assert_eq!(decode(encoded_with_padding_large), None);
+    }
+
+    // ============================================================
+    // Round-trip: encode then decode (many tests)
+    // ============================================================
+
+    fn round_trip(data: &[u8]) {
+        let encoded = encode(data);
+        let decoded = decode(&encoded);
+        assert_eq!(
+            decoded,
+            Some(data.to_vec()),
+            "round-trip failed for {data:?}"
+        );
+    }
+
+    #[test]
+    fn round_trip_length_100() {
+        let input: Vec<u8> = (0..100).collect();
+        round_trip(&input);
+    }
+
+    #[test]
+    fn round_trip_all_zeros() {
+        for len in [1, 2, 3, 4, 5, 8, 12] {
+            let input = vec![0u8; len];
+            round_trip(&input);
+        }
+    }
+
+    #[test]
+    fn round_trip_all_max() {
+        for len in [1, 2, 3, 4, 5, 8, 12] {
+            let input = vec![0xFFu8; len];
+            round_trip(&input);
+        }
+    }
+
+    #[test]
+    fn round_trip_alternating_patterns() {
+        round_trip(&[0xAA, 0x55, 0xAA, 0x55]);
+        round_trip(&[0xAA, 0x55, 0xAA, 0x55, 0xAA]);
+        round_trip(&[0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF]);
+    }
+
+    #[test]
+    fn round_trip_consecutive_lengths() {
+        for len in 0..=16 {
+            let input: Vec<u8> = (0..len as u8).collect();
+            if len == 0 {
+                let encoded = encode(&input);
+                assert_eq!(encoded, "0");
+                // decode can't handle length-1 inputs,
+                // so empty round-trip is expected to fail.
+                continue;
+            }
+            round_trip(&input);
+        }
+    }
+
+    #[test]
+    fn round_trip_all_byte_values_single() {
+        // Encode every single byte value 0..=255 and verify round-trip
+        for byte in 0..=255u8 {
+            let input = [byte];
+            let encoded = encode(&input);
+            let decoded = decode(&encoded);
+            assert_eq!(
+                decoded,
+                Some(input.to_vec()),
+                "round-trip failed for single byte {byte}"
+            );
+        }
     }
 }
