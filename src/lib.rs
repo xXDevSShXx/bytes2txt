@@ -1,15 +1,7 @@
-const REFERENCE_SET: [&str; 95] = [
-    " ", "!", "\"", "#", "$", "%", "&", "'", "(", ")", "*", "+", ",", "-", ".", "/", "0", "1", "2",
-    "3", "4", "5", "6", "7", "8", "9", ":", ";", "<", "=", ">", "?", "@", "A", "B", "C", "D", "E",
-    "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X",
-    "Y", "Z", "[", "\\", "]", "^", "_", "`", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k",
-    "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "{", "|", "}", "~",
-];
-
 pub fn encode(buf: &[u8]) -> String {
     let mut buf = buf.to_owned();
     let mut padding_bytes = 0u8;
-    if buf.len() % 4 != 0 {
+    if !buf.len().is_multiple_of(4) {
         padding_bytes = 4 - ((buf.len() % 4) as u8);
         let mut zeros = std::iter::repeat_n(0u8, padding_bytes as usize).collect();
         buf.append(&mut zeros);
@@ -37,20 +29,25 @@ fn four_bytes_to_u32(bytes: &[u8]) -> u32 {
 }
 
 fn u32_to_base95string(value: u32) -> String {
-    let mut value = value as usize;
+    let mut value = value;
 
-    let first_digit = REFERENCE_SET[value / 81450625]; // 95 ^ 4
+    let first_digit = char::from_u32(value / 81450625 + 32)
+        .expect("this shouldn't fail because: u32::MAX is Smaller than 95^5"); // 95 ^ 4
     value %= 81450625;
 
-    let second_digit = REFERENCE_SET[value / 857375]; // 95 ^ 3
+    let second_digit = char::from_u32(value / 857375 + 32)
+        .expect("this shouldn't fail because: u32::MAX is Smaller than 95^5"); // 95 ^ 3
     value %= 857375;
 
-    let third_digit = REFERENCE_SET[value / 9025]; // 95 ^ 2
+    let third_digit = char::from_u32(value / 9025 + 32)
+        .expect("this shouldn't fail because: u32::MAX is Smaller than 95^5"); // 95 ^ 2
     value %= 9025;
 
-    let fourth_digit = REFERENCE_SET[value / 95]; // 95 ^ 1
+    let fourth_digit = char::from_u32(value / 95 + 32)
+        .expect("this shouldn't fail because: u32::MAX is Smaller than 95^5"); // 95 ^ 1
 
-    let fifth_digit = REFERENCE_SET[value % 95]; // 95 ^ 0
+    let fifth_digit = char::from_u32(value % 95 + 32)
+        .expect("this shouldn't fail because: u32::MAX is Smaller than 95^5"); // 95 ^ 0
 
     format!(
         "{}{}{}{}{}",
@@ -59,7 +56,7 @@ fn u32_to_base95string(value: u32) -> String {
 }
 
 pub fn decode(txt: String) -> Option<Vec<u8>> {
-    if (txt.len() % 5) != 0 || txt.len() == 5 || !txt.is_ascii() {
+    if !txt.len().is_multiple_of(5) || txt.len() == 5 || !txt.is_ascii() {
         return None;
     }
 
@@ -80,13 +77,12 @@ pub fn decode(txt: String) -> Option<Vec<u8>> {
 }
 
 fn base95string_to_u32(string: &[char]) -> u32 {
-    let mut string = string.iter().map(|&char| (char as u64) - 32);
-    let value = string.next().expect("size checked at compile time shouldn't fail") * 81450625 // 95 ^ 4
-        + string.next().expect("size checked at compile time shouldn't fail") * 857375 // 95 ^ 3
-        + string.next().expect("size checked at compile time shouldn't fail") * 9025 // 95 ^ 2
-        + string.next().expect("size checked at compile time shouldn't fail") * 95 // 95 ^ 1
-        + string.next().expect("size checked at compile time shouldn't fail");
-    value as u32
+    let mut string = string.iter().map(|&char| (char as u32) - 32);
+    string.next().expect("size checked at compile time shouldn't fail") * 81450625 // 95 ^ 4
+    + string.next().expect("size checked at compile time shouldn't fail") * 857375 // 95 ^ 3
+    + string.next().expect("size checked at compile time shouldn't fail") * 9025   // 95 ^ 2
+    + string.next().expect("size checked at compile time shouldn't fail") * 95     // 95 ^ 1
+    + string.next().expect("size checked at compile time shouldn't fail")
 }
 
 fn u32_to_four_bytes(value: u32) -> [u8; 4] {
